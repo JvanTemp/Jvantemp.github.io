@@ -1,21 +1,300 @@
-<!DOCTYPE html>
+<!--
+minimal black themed music gallery and player
+single file html css js
+
+how to use
+1 set repoOwner and repoName variables below to your github username and repo name
+2 ensure your songs are in the folder named "songs" at the repository root
+3 commit this file to the repository and enable GitHub Pages or host the file on any static server
+
+notes
+- the script uses the github contents api to list files in the songs folder
+- thumbnails are detected if an image file shares the same base name as the mp3
+- if a thumbnail is missing a placeholder is used
+-->
+
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Music Player</title>
-  <link rel="stylesheet" href="style.css">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>minimal music player</title>
+  <style>
+    :root{--bg:#000;--fg:#fff;--muted:#bdbdbd}
+    html,body{height:100%}
+    body{background:var(--bg);color:var(--fg);font-family:Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;line-height:1.2;margin:0;padding:0}
+    .container{max-width:1100px;margin:0 auto;padding:16px}
+
+    /* player */
+    .player{position:sticky;top:0;z-index:40;background:#050505;border-bottom:1px solid rgba(255,255,255,0.04);backdrop-filter:blur(6px);transform-origin:top;transition:transform .22s ease-in-out}
+    .player.hidden{transform:translateY(-120%)}
+    .player-inner{display:flex;gap:12px;align-items:center;padding:12px}
+    .cover{width:64px;height:64px;flex:0 0 64px;border-radius:6px;background:#111;display:flex;align-items:center;justify-content:center;overflow:hidden}
+    .cover img{width:100%;height:100%;object-fit:cover}
+    .meta{flex:1;min-width:0}
+    .title{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .artist{font-size:12px;color:var(--muted);margin-top:4px}
+
+    /* controls */
+    .controls{display:flex;align-items:center;gap:8px}
+    button{background:transparent;border:0;color:var(--fg);cursor:pointer;padding:8px;border-radius:6px}
+    button:active{opacity:.8}
+    .icon{width:20px;height:20px;display:inline-block}
+    .big{width:36px;height:36px}
+
+    /* progress and volume */
+    .progress-wrap{display:flex;align-items:center;gap:8px;margin-top:8px}
+    .progress{flex:1;height:6px;background:rgba(255,255,255,0.06);border-radius:6px;overflow:hidden}
+    .progress .bar{height:100%;background:linear-gradient(90deg,#fff,#bdbdbd);width:0%}
+    .time{font-size:12px;color:var(--muted);min-width:54px;text-align:right}
+    input[type=range]{-webkit-appearance:none;background:transparent;height:6px}
+    input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;background:#fff;border-radius:50%}
+
+    /* gallery */
+    .gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:12px;padding:18px 0}
+    .tile{display:flex;flex-direction:column;align-items:center;text-align:center;cursor:pointer}
+    .thumb{width:100%;aspect-ratio:1/1;border-radius:8px;overflow:hidden;background:#111;display:flex;align-items:center;justify-content:center}
+    .thumb img{width:100%;height:100%;object-fit:cover}
+    .song-name{font-size:13px;margin-top:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+    /* small screens */
+    @media (max-width:420px){.container{padding:12px}.cover{width:56px;height:56px}.title{font-size:13px}.gallery{gap:10px}}
+
+    /* subtle focus for accessibility */
+    a,button{outline-color:rgba(255,255,255,0.12)}
+
+    .muted{color:var(--muted)}
+    .hidden{display:none}
+  </style>
 </head>
 <body>
-  <div class="player">
-    <h1>My GitHub Song Player</h1>
-    <audio id="audio" controls>
-      <source src="song.mp3" type="audio/mpeg">
-      Your browser does not support the audio element.
-    </audio>
-    <button id="playBtn">Play</button>
-    <button id="pauseBtn">Pause</button>
+  <div class="player hidden" id="player">
+    <div class="container player-inner">
+      <div class="cover" id="player-cover"><img src="" alt="cover" id="player-cover-img"></div>
+      <div class="meta">
+        <div class="title" id="player-title">no song</div>
+        <div class="artist" id="player-artist"></div>
+        <div class="progress-wrap">
+          <div class="progress" id="progress" title="progress"><div class="bar" id="progress-bar"></div></div>
+          <div class="time" id="time">0:00</div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button id="prev" title="previous">◀◀</button>
+        <button id="playpause" class="big" title="play">▶</button>
+        <button id="next" title="next">▶▶</button>
+        <button id="shuffle" title="shuffle">🔀</button>
+        <button id="repeat" title="repeat">🔁</button>
+        <input id="volume" type="range" min="0" max="1" step="0.01" value="0.9" title="volume" style="width:96px">
+        <a id="download" href="#" download class="muted" title="download">download</a>
+      </div>
+    </div>
   </div>
 
-  <script src="script.js"></script>
+  <main class="container">
+    <h1 style="display:none">minimal music player</h1>
+    <div id="gallery" class="gallery" aria-live="polite"></div>
+  </main>
+
+  <audio id="audio"></audio>
+
+  <script>
+  // set your github repo owner and repo name here
+  const repoOwner = 'jvantemp'
+  const repoName = 'Jvantemp.github.io'
+  const songsFolder = 'songs'
+
+  // ui refs
+  const gallery = document.getElementById('gallery')
+  const playerEl = document.getElementById('player')
+  const audio = document.getElementById('audio')
+  const playerTitle = document.getElementById('player-title')
+  const playerArtist = document.getElementById('player-artist')
+  const playerCoverImg = document.getElementById('player-cover-img')
+  const progressBar = document.getElementById('progress-bar')
+  const timeEl = document.getElementById('time')
+  const playpauseBtn = document.getElementById('playpause')
+  const prevBtn = document.getElementById('prev')
+  const nextBtn = document.getElementById('next')
+  const shuffleBtn = document.getElementById('shuffle')
+  const repeatBtn = document.getElementById('repeat')
+  const volumeInput = document.getElementById('volume')
+  const downloadLink = document.getElementById('download')
+
+  let songs = []
+  let currentIndex = -1
+  let isShuffling = false
+  let repeatMode = false // false no repeat true repeat one
+
+  function humanTime(s){
+    if (!s || isNaN(s)) return '0:00'
+    s = Math.floor(s)
+    const m = Math.floor(s/60)
+    const sec = String(s%60).padStart(2,'0')
+    return m+':'+sec
+  }
+
+  function renderGallery(){
+    gallery.innerHTML = ''
+    songs.forEach((s,i)=>{
+      const tile = document.createElement('div')
+      tile.className = 'tile'
+      tile.tabIndex = 0
+      tile.setAttribute('role','button')
+      tile.setAttribute('aria-label', s.name)
+
+      const thumb = document.createElement('div')
+      thumb.className = 'thumb'
+      const img = document.createElement('img')
+      img.alt = s.name
+      img.src = s.thumb || 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400"><rect fill="%23121212" width="100%" height="100%"/><text x="50%" y="50%" font-size="28" fill="%23ffffff" text-anchor="middle" dominant-baseline="middle">no art</text></svg>'
+      thumb.appendChild(img)
+
+      const label = document.createElement('div')
+      label.className = 'song-name'
+      label.textContent = s.name
+
+      tile.appendChild(thumb)
+      tile.appendChild(label)
+
+      tile.addEventListener('click', ()=>{
+        openPlayer(i)
+      })
+      tile.addEventListener('keypress', (e)=>{ if (e.key === 'Enter') openPlayer(i) })
+
+      gallery.appendChild(tile)
+    })
+  }
+
+  function openPlayer(index){
+    if (index < 0 || index >= songs.length) return
+    currentIndex = index
+    const s = songs[currentIndex]
+    audio.src = s.download_url
+    playerTitle.textContent = s.name
+    playerArtist.textContent = s.artist || ''
+    playerCoverImg.src = s.thumb || ''
+    downloadLink.href = s.download_url
+    downloadLink.setAttribute('download', s.filename || '')
+    if (playerEl.classList.contains('hidden')) playerEl.classList.remove('hidden')
+    audio.play().catch(()=>{ /* autoplay may be blocked on mobile browsers */ })
+    updatePlayButton()
+  }
+
+  function updatePlayButton(){
+    playpauseBtn.textContent = audio.paused ? '▶' : '❚❚'
+  }
+
+  playpauseBtn.addEventListener('click', ()=>{
+    if (!audio.src) return
+    if (audio.paused) audio.play()
+    else audio.pause()
+    updatePlayButton()
+  })
+
+  prevBtn.addEventListener('click', ()=>{
+    if (songs.length === 0) return
+    if (audio.currentTime > 3) {
+      audio.currentTime = 0
+    } else {
+      currentIndex = (currentIndex - 1 + songs.length) % songs.length
+      openPlayer(currentIndex)
+    }
+  })
+
+  nextBtn.addEventListener('click', ()=>{ playNext() })
+
+  shuffleBtn.addEventListener('click', ()=>{
+    isShuffling = !isShuffling
+    shuffleBtn.style.opacity = isShuffling ? '1' : '0.6'
+  })
+
+  repeatBtn.addEventListener('click', ()=>{
+    repeatMode = !repeatMode
+    repeatBtn.style.opacity = repeatMode ? '1' : '0.6'
+  })
+
+  volumeInput.addEventListener('input', ()=>{ audio.volume = parseFloat(volumeInput.value) })
+
+  audio.addEventListener('timeupdate', ()=>{
+    const pct = (audio.currentTime / (audio.duration||1)) * 100
+    progressBar.style.width = pct + '%' 
+    timeEl.textContent = humanTime(audio.currentTime) + ' / ' + (audio.duration ? humanTime(audio.duration) : '0:00')
+  })
+
+  audio.addEventListener('play', updatePlayButton)
+  audio.addEventListener('pause', updatePlayButton)
+
+  audio.addEventListener('ended', ()=>{
+    if (repeatMode) {
+      audio.currentTime = 0
+      audio.play()
+      return
+    }
+    playNext()
+  })
+
+  function playNext(){
+    if (songs.length === 0) return
+    if (isShuffling){
+      let next = Math.floor(Math.random() * songs.length)
+      if (songs.length > 1 && next === currentIndex) next = (next + 1) % songs.length
+      currentIndex = next
+    } else {
+      currentIndex = (currentIndex + 1) % songs.length
+    }
+    openPlayer(currentIndex)
+  }
+
+  // seek on progress click
+  document.getElementById('progress').addEventListener('click', (e)=>{
+    const rect = e.currentTarget.getBoundingClientRect()
+    const x = e.clientX - rect.left
+    const pct = x / rect.width
+    if (audio.duration) audio.currentTime = pct * audio.duration
+  })
+
+  // fetch repository contents
+  async function loadFromGitHub(){
+    try{
+      const api = `https://api.github.com/repos/${repoOwner}/${repoName}/contents/${songsFolder}`
+      const res = await fetch(api)
+      if (!res.ok) throw new Error('could not access github contents api. ensure this repo is public and variables are set')
+      const items = await res.json()
+      // build maps
+      const images = {}
+      const mp3s = []
+      items.forEach(it=>{
+        const name = it.name
+        const lower = name.toLowerCase()
+        if (lower.endsWith('.mp3')) mp3s.push(it)
+        if (lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.png') || lower.endsWith('.webp') || lower.endsWith('.gif')){
+          images[name] = it
+        }
+      })
+
+      // pair mp3s with thumbnails if available
+      songs = mp3s.map(it=>{
+        const filename = it.name
+        const base = filename.replace(/\.mp3$/i, '')
+        // search for matching image by base name
+        const possible = Object.keys(images).find(k=>k.replace(/\.(jpg|jpeg|png|webp|gif)$/i,'') === base)
+        const thumb = possible ? images[possible].download_url : null
+        // derive display name from filename
+        const display = base.replace(/[-_]/g,' ').replace(/\.(mp3)$/i,'')
+        return {name: display, filename, download_url: it.download_url, thumb}
+      }).sort((a,b)=>a.name.localeCompare(b.name))
+
+      renderGallery()
+    }catch(err){
+      gallery.innerHTML = `<div style="color:#fff;padding:24px">error loading songs. set repoOwner and repoName variables and ensure the repo is public. console for details.</div>`
+      console.error(err)
+    }
+  }
+
+  // start
+  loadFromGitHub()
+  </script>
 </body>
 </html>
